@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Import Transactions</title>
+    <script src="jsdeps/grist-plugin-api.js"></script>
+    <script src="jsdeps/ofx2csv-bundle.js"></script>
+    <script src="jsdeps/papaparse.min.js"></script>
+    <style>
+.transactionforminput {
+  width: 95%;
+  font-size: 120%;
+  padding: 10px;
+}
+.transactionforminputhalf {
+  width: 50%;
+  font-size: 120%;
+  float: left;
+    padding: 10px;
+}
+span.clear { clear: left; display: block; }
+.halfspacer { height: 0.5em; }
+.spacer { height: 1em; }
+.selectedbutton { background-color: #bbb; }
+
+    </style>
+    <link href="https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900|Material+Icons" rel="stylesheet" type="text/css">
+    <link href="jsdeps/quasar.prod-2.10.2.css" rel="stylesheet" type="text/css">
+
+	<script>
+      		var tableId = null;
+
+	      	grist.ready({
+			requiredAccess: 'full'
+	      	});
+	      	grist.on('message', (e) => {
+			if (e.tableId) { tableId = e.tableId; }
+	      	});
+	</script>
+	<script src="lib.js"></script>
+  </head>
+  <body>
+	  <div id="q-app">
+		  <div class="q-ma-md">
+			  <q-file v-model="fileList" multiple label="Pick Files to Import" />
+			  <q-btn label="Load" @click="loadAction()"></q-btn>
+		  </div>
+		  <q-list bordered>
+			  <div v-for="config in importConfigs">
+				  <q-expansion-item group="somegroup" :label="config.fileName" :caption="config.caption" header-class="text-primary">
+					  <q-card>
+						  <q-card-section>
+							  <q-select map-options emit-value v-model="config.account" :options="accounts" label="Account"  @update:model-value="updateOutput();"></q-select>
+							  <q-select map-options emit-value v-model="config.amountColumn" :options="config.amountColumns" label="Amount Column(s)"  @update:model-value="updateOutput();"></q-select>
+
+							  <q-select v-if="config.amountColumns && config.amountColumns[config.amountColumn] && config.amountColumns[config.amountColumn].indexes && config.amountColumns[config.amountColumn].indexes.length==2" map-options emit-value v-model="config.amountType" :options="[{label: '+Credit / +Debit', value: 0}, {label: '+Credit / -Debit', value: 1}, {label: '-Credit / +Debit', value: 2}, {label: '-Credit / -Debit', value: 3}]" label="Credit/Debit Column Signs"  @update:model-value="updateOutput();"></q-select>
+							  <q-select v-else map-options emit-value v-model="config.amountType" :options="[{label: '+Amount', value: 0}, {label: '-Amount', value: 1}]" label="Amount Column Sign"  @update:model-value="updateOutput();"></q-select>
+
+							  <q-select map-options emit-value v-model="config.dateColumn" :options="config.dateColumns" label="Date Column"  @update:model-value="updateOutput();"></q-select>
+							  <q-select map-options emit-value v-model="config.descriptionColumn" :options="config.descriptionColumns" label="Description Column" @update:model-value="updateOutput();"></q-select>
+							  <q-table :rows="config.objectCsv" title="Raw Data"></q-table>
+						  </q-card-section>
+					  </q-card>
+				  </q-expansion-item>
+				  <q-separator></q-separator>
+	  		  </div>
+		  </q-list>
+		  <q-table :rows="outputData" title="Output Data"></q-table>
+		  <q-btn label="Import" @click="importAction()" :disable="!outputData || outputData.length == 0"></q-btn>
+	  </div>
+	  <script src="jsdeps/vue.global.prod-3.2.45.js"></script>
+	  <script src="jsdeps/quasar.umd.prod-2.10.2.js"></script>
+
+	  <script>
+const { useQuasar } = Quasar;
+const { ref } = Vue;
+
+const app = Vue.createApp({
+	setup () {
+		const $q = useQuasar()
+		const fileList = ref(null)
+		const importConfigs = ref(null);
+		const importedData = ref(null);
+		const accounts = ref(null);
+		const outputData = ref([]);
+		let accountIdToName = {};
+
+		async function loadAction () {
+			//$q.notify('Running on Quasar v' + $q.version)
+			const accountData = await grist.docApi.fetchTable("Accounts");
+			const postings = await grist.docApi.fetchTable("Postings");
+			const lookups = genExistingTransactionLookup(postings);
+
+			accountIdToName = {};
+			const accountOptionList = [];
+			for (let i in accountData.id)
+			{
+				accountIdToName[accountData.id[i].toString()] = accountData.name[i];
+				accountOptionList.push({label: accountData.name[i], value: accountData.id[i]});
+			}
+			accounts.value = accountOptionList;
+
+			let dataSets = null;
+			const thisDate = new Date();
+			const thisDateYear = thisDate.getFullYear();
+			if (fileList.value && fileList.value.length > 0)
+			{
+				dataSets = await importFiles(fileList.value);
+
+				for (let f = 0; f < dataSets.length; f++)
+				{
+					dataSets[f].objectCsv = [];
+					for (let r = 1; r < dataSets[f].csv.length; r++)
+					{
+						const ob = {};
+						for (let c = 0; c < dataSets[f].csv[0].length; c++)
+						{
+							ob[dataSets[f].csv[0][c]] = dataSets[f].csv[r][c];
+						}
+						dataSets[f].objectCsv.push(ob);
+					}
+					const scan = scanCsvColumns(postings, lookups.existing, dataSets[f].csv);
+					dataSets[f].scan = scan;
+					if (dataSets[f].objectCsv.length > 5)
+					{
+						const bestMatch = analyzeDataToMatchColumns(postings, lookups, dataSets[f].csv, scan, thisDateYear);
+						if (bestMatch.accountMatchRatio > 0.2)
+						{
+							dataSets[f].account = bestMatch.account;
+							dataSets[f].amountColumn = bestMatch.amountColumn;
+							dataSets[f].dateColumn = bestMatch.dateColumn;
+							dataSets[f].descriptionColumn = bestMatch.descriptionColumn;
+							dataSets[f].amountType = bestMatch.amountType;
+							dataSets[f].caption = (bestMatch.accountMatchRatio*100).toFixed(0)+"% of data matched existing records for account: "+accountIdToName[bestMatch.account];
+						}
+						else
+						{
+							dataSets[f].account = null;
+							dataSets[f].amountColumn = null;
+							dataSets[f].dateColumn = null;
+							dataSets[f].descriptionColumn = null;
+							dataSets[f].amountType = null;
+							dataSets[f].caption = "Failed to auto match 20% of rows. Matched: " + (bestMatch.accountMatchRatio*100).toFixed(0) + "%";
+						}
+					}
+					else
+					{
+						dataSets[f].account = null;
+						dataSets[f].amountColumn = null;
+						dataSets[f].dateColumn = null;
+						dataSets[f].descriptionColumn = null;
+						dataSets[f].amountType = null;
+						dataSets[f].caption = "Need at least 5 rows to try auto matching data";
+					}
+					dataSets[f].amountColumns = scan.amountColumns;
+					dataSets[f].dateColumns = scan.dateColumns;
+					dataSets[f].descriptionColumns = scan.descriptionColumns;
+				}
+				window.localStorage.setItem("importDataSets", JSON.stringify(dataSets));
+			}
+			else if (window.localStorage.getItem("importDataSets"))
+			{
+				dataSets = JSON.parse(window.localStorage.getItem("importDataSets"));
+			}
+			else
+			{
+				return;
+			}
+			importConfigs.value = dataSets;
+			await updateOutput(postings);
+		};
+
+		async function updateOutput(postings = null) {
+			const thisDate = new Date();
+			const thisDateYear = thisDate.getFullYear();
+
+			let postingsRef = null;
+			if (postings !== null)
+			{
+				postingsRef = postings;
+			}
+			else
+			{
+				postingsRef = await grist.docApi.fetchTable("Postings");
+			}
+			const autoClassify = await grist.docApi.fetchTable("Auto_Classify");
+
+			const lookups = genExistingTransactionLookup(postingsRef);
+
+			let output = [];
+			for (let f = 0; f < importConfigs.value.length; f++)
+			{
+				const dataSet = importConfigs.value[f];
+				if (dataSet.amountColumn !== null && dataSet.account !== null && dataSet.descriptionColumn !== null && dataSet.dateColumn !== null && dataSet.amountType !== null)
+				{
+					const outputSet = matchPostings(postingsRef, lookups, dataSet, thisDateYear, accountIdToName);
+					console.log("Number of output transactions after matching: ", outputSet.length);
+					output = output.concat(outputSet);
+				}
+				else
+				{
+					console.log("Some data not filled in so not matching data");
+				}
+			}
+			let unknown_expense_account = null;
+			let unknown_income_account = null;
+
+			for (let a in accountIdToName)
+			{
+				if (accountIdToName[a].toLowerCase().indexOf("expenses:") == 0 && accountIdToName[a].toLowerCase().indexOf("unknown") >= 0)
+				{
+					unknown_expense_account = parseInt(a);
+				}
+				else if (accountIdToName[a].toLowerCase().indexOf("income:") == 0 && accountIdToName[a].toLowerCase().indexOf("unknown") >= 0)
+				{
+					unknown_income_account = parseInt(a);
+				}
+			}
+
+			if (unknown_expense_account !== null)
+			{
+				for (let t in output)
+				{
+					let anythingMatched = false;
+					for (let rule in autoClassify.id)
+					{
+						if (autoClassify.description_match[rule] || autoClassify.amount_match[rule])
+						{
+							let match = true;
+							if (autoClassify.description_match[rule] && output[t].description.toLowerCase().indexOf(autoClassify.description_match[rule].toLowerCase()) < 0 && autoClassify.description_match[rule].toLowerCase().indexOf(output[t].description.toLowerCase()) < 0)
+							{
+								match = false;
+							}
+							if (autoClassify.primary_account[rule] && autoClassify.primary_account[rule] != output[t].account)
+							{
+								match = false;
+							}
+							if (autoClassify.amount_match[rule] && Math.abs(autoClassify.amount_match[rule] - output[t].amount) > 0.0000001)
+							{
+								match = false;
+							}
+							if (match)
+							{
+								output[t].categoryAccount = autoClassify.category_account[rule];
+								output[t].categoryAccountName = accountIdToName[autoClassify.category_account[rule]];
+								if (autoClassify.comment[rule])
+								{
+									output[t].comment = autoClassify.comment[rule];
+								}
+								anythingMatched = true;
+								break;
+							}
+						}
+					}
+					if (!anythingMatched)
+					{
+						output[t].categoryAccount = unknown_expense_account;
+						output[t].categoryAccountName = accountIdToName[unknown_expense_account];
+						if (output[t].amount > -0.00000001 && unknown_income_account !== null)
+						{
+							output[t].categoryAccount = unknown_income_account;
+							output[t].categoryAccountName = accountIdToName[unknown_income_account];
+						}
+					}
+				}
+			}
+			outputData.value = output;
+			return output;
+		};
+
+		async function importAction(postings = null) {
+			const output = await updateOutput();
+			for (let r in output)
+			{
+				const val = await grist.docApi.applyUserActions([ ["AddRecord", "Transactions", -1, {"date": output[r].date, "description": output[r].description}]])
+			    	const txnId = val.retValues[0];
+
+			    	await grist.docApi.applyUserActions([ ["AddRecord", "Postings", -1, {"account": output[r].account, "amount": output[r].amount, transaction: txnId}]])
+			    	await grist.docApi.applyUserActions([ ["AddRecord", "Postings", -1, {"account": output[r].categoryAccount, "amount": -output[r].amount, posting_comment: output[r].comment, posting_status: "I", transaction: txnId}]])
+			}
+			window.localStorage.setItem("importDataSets", "");
+			outputData.value = [];
+			importConfigs.value = null;
+		};
+
+		return {
+			loadAction,
+			importAction,
+			importedData,
+			importConfigs,
+			fileList,
+			accounts,
+			updateOutput,
+			outputData
+		}
+	},
+	mounted() {
+		this.loadAction();
+	}
+})
+
+app.use(Quasar, { config: {} })
+app.mount('#q-app')
+	  </script>
+  </body>
+</html>
