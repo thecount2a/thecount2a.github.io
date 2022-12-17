@@ -4,94 +4,147 @@
     <meta charset="utf-8">
     <title>Add Transaction</title>
     <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
-    <style>
-.transactionforminput {
-  width: 95%;
-  font-size: 120%;
-  padding: 10px;
-}
-.transactionforminputhalf {
-  width: 50%;
-  font-size: 120%;
-  float: left;
-    padding: 10px;
-}
-span.clear { clear: left; display: block; }
-.halfspacer { height: 0.5em; }
-.spacer { height: 1em; }
-.selectedbutton { background-color: #bbb; }
 
-    </style>
-    <script>
-      function selectBtn (which, el) {
-        const div = document.getElementById(which+"buttons");
-        let clickedButton = null;
-        for (let i = 0; i < div.children.length; i++)
-        {
-          if (el && div.children[i].children[0].isEqualNode(el))
-          {
-            div.children[i].children[0].classList.add("selectedbutton");
-            clickedButton = div.children[i].children[0].value;
-          }
-          else
-          {
-            div.children[i].children[0].classList.remove("selectedbutton");
-          }
-        }
-        const block = document.getElementById(which+"manualblock");
-        if (clickedButton == "Manual Entry")
-        {
-          block.style.display = "block";
-        }
-        else
-        {
-          block.style.display = "none";
-          if (clickedButton)
-          {
-            document.getElementById(which).value = mapping[clickedButton];
-          }
-        }
-      }
-    </script>
+    <link href="https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900|Material+Icons" rel="stylesheet" type="text/css">
+    <link href="jsdeps/quasar.prod-2.10.2.css" rel="stylesheet" type="text/css">
   </head>
   <body>
-    <label><b>Account</b></label>
-    <span class="clear halfspacer"></span>
-    <div class="spacer" id="accountbuttons">
-      <div><input type="button" value="Manual Entry" class="transactionforminputhalf" onClick="selectBtn('account', this);"/></div>
-    </div>
-    <span class="clear spacer"></span>
-    <div id="accountmanualblock" style="display: none;">
-      <label for="account"><b>Manual Account</b></label>
-      <p><input type="text" id="account" name="account" placeholder="Account" class="transactionforminput"/></p>
-    </div>
-    <label for="date"><b>Date</b></label>
-    <p><input type="text" id="date" name="date" placeholder="Date" class="transactionforminput"/></p>
-    <label for="payee"><b>Payee</b></label>
-    <p><input type="text" id="payee" name="payee" placeholder="Payee" class="transactionforminput"/></p>
-    <label for="amount"><b>Amount ($)</b></label>
-    <p><input type="number" id="amount" name="amount" placeholder="Amount ($)" class="transactionforminput" /></p>
-    <label for="comment"><b>Comment</label>
-    <p><input type="text" id="comment" name="comment" placeholder="Comment" class="transactionforminput" /></p>
+	  <div id="q-app">
+	  	<transaction-editor :transaction_data="txn" :accounts="accounts" :categories="categories"></transaction-editor>
+		<div style="height: 20px; text-align: center; text-decoration: bold;"><span style="color: red">{{errorMessage}}</span><span style="color: green">{{successMessage}}</span></div>
+		<q-btn label="Add" @click="addTransaction()"></q-input>
+	  </div>
 
-    <label><b>Category</b></label>
-    <span class="clear halfspacer"></span>
-    <div id="categorybuttons">
-      <div><input type="button" value="Manual Entry" class="transactionforminputhalf" onClick="selectBtn('category', this);"/></div>
-    </div>
-    <span class="clear spacer"></span>
-    <div id="categorymanualblock" style="display: none;">
-      <label for="category"><b>Manual Category</b></label>
-      <p><input type="text" id="category" name="category" placeholder="Category" class="transactionforminput"/></p>
-    </div>
-    <div style="height: 20px; text-align: center; text-decoration: bold;" id="message">
-    </div>
-    <p><input type="button" id="addbutton" value="Add" class="transactionforminput"/></p>
+    <script src="jsdeps/vue.global.prod-3.2.45.js"></script>
+    <script src="jsdeps/quasar.umd.prod-2.10.2.js"></script>
+    <script>
+const { useQuasar } = Quasar;
+const { ref, toRef } = Vue;
+
+
+const app = Vue.createApp({
+	setup () {
+		const $q = useQuasar()
+		const txn = ref({});
+		const accounts = ref([]);
+		const categories = ref([]);
+		const errorMessage = ref("");
+		const successMessage = ref("");
+
+		var MyDate = new Date();
+		var MyDateString;
+
+		MyDateString = MyDate.getFullYear() + '-' + ('0' + (MyDate.getMonth()+1)).slice(-2) + '-'
+		  + ('0' + MyDate.getDate()).slice(-2);
+		txn.value.date = MyDateString;
+
+		const addTransaction = async function() {
+			console.log(txn.value.account);
+			console.log(txn.value.date);
+			console.log(txn.value.payee);
+			console.log(txn.value.amount);
+			console.log(txn.value.comment);
+			console.log(txn.value.category);
+
+			successMessage.value="";
+			if (txn.value.account === null || txn.value.account === undefined)
+			{
+			  errorMessage.value="Please select an account";
+			  return;
+			}
+			if (!txn.value.date)
+			{
+			  errorMessage.value="Please enter a transaction date";
+			  return;
+			}
+			if (!txn.value.payee)
+			{
+			  errorMessage.value="Please enter a transaction description";
+			  return;
+			}
+			if (!txn.value.amount)
+			{
+			  errorMessage.value="Please enter a transaction amount";
+			  return;
+			}
+			if (txn.value.category === null || txn.value.category === undefined)
+			{
+			  errorMessage.value="Please select a category";
+			  return;
+			}
+			try
+			{
+			  const val = await grist.docApi.applyUserActions([ ["AddRecord", "Transactions", -1, {"date": txn.value.date, "description": txn.value.payee}]])
+			  const txnId = val.retValues[0];
+
+			  await grist.docApi.applyUserActions([ ["AddRecord", "Postings", -1, {"account": txn.value.account, "amount": -(new Number(txn.value.amount)), transaction: txnId}]])
+			  await grist.docApi.applyUserActions([ ["AddRecord", "Postings", -1, {"account": txn.value.category, "amount": new Number(txn.value.amount), posting_comment: txn.value.comment, transaction: txnId}]])
+
+			  successMessage.value="Success! Transaction added";
+			  errorMessage.value="";
+			  const dateValue = txn.value.date;
+			  txn.value = { date: dateValue };
+			}
+			catch (e)
+			{
+			  errorMessage.value="Failed to add transaction!";
+			}
+		}
+		const loadAccounts = async function() {
+			const result = await grist.docApi.fetchTable("Accounts");
+			const friendlyAccounts = [];
+			const otherAccounts = [];
+			const friendlyCategories = [];
+			const otherCategories = [];
+			for (let i = 0; i < result.id.length; i++)
+			{
+			  if ((result.name[i].startsWith("Assets:") || result.name[i].startsWith("Liabilities:")) && result.friendly_name[i])
+			  {
+		            friendlyAccounts.push({value: result.id[i], label: result.friendly_name[i]});
+			  }
+			  else
+			  {
+		            otherAccounts.push({value: result.id[i], label: result.name[i]});
+		          }
+			  if ((result.name[i].startsWith("Expenses:") || result.name[i].startsWith("Income:")) && result.friendly_name[i])
+			  {
+		            friendlyCategories.push({value: result.id[i], label: result.friendly_name[i]});
+			  }
+			  else
+			  {
+		            otherCategories.push({value: result.id[i], label: result.name[i]});
+			  }
+			}
+			accounts.value = friendlyAccounts.concat(otherAccounts);
+			categories.value = friendlyCategories.concat(otherCategories);
+		}
+
+		return {
+			txn,
+			accounts,
+			categories,
+			loadAccounts,
+			addTransaction,
+			errorMessage,
+			successMessage
+		}
+	},
+	mounted() {
+		this.loadAccounts();
+	}
+});
+    </script>
+    <script src="transaction_editor.js"></script>
+    <script>
+app.component('transaction-editor', TransactionEditor);
+
+app.use(Quasar, { config: {} })
+app.mount('#q-app')
+
+    </script>
 
     <script>
       var tableId = null;
-      var mapping = {};
-      var accountNameToId = {};
       grist.ready({
         requiredAccess: 'full'
       });
@@ -99,105 +152,6 @@ span.clear { clear: left; display: block; }
         if (e.tableId) { tableId = e.tableId; }
       });
       
-      window.onload = async () => {
-        var MyDate = new Date();
-        var MyDateString;
-
-        MyDateString = MyDate.getFullYear() + '-' + ('0' + (MyDate.getMonth()+1)).slice(-2) + '-'
-          + ('0' + MyDate.getDate()).slice(-2);
-
-        document.getElementById('date').value = MyDateString;
-
-        const result = await grist.docApi.fetchTable("Accounts");
-        for (let i = 0; i < result.id.length; i++)
-        {
-          if ((result.name[i].startsWith("Assets:") || result.name[i].startsWith("Liabilities:")) && result.friendly_name[i])
-          {
-            const div = document.createElement("div");
-            div.innerHTML="<input type=\"button\" value=\""+result.friendly_name[i]+"\" class=\"transactionforminputhalf\" onClick=\"selectBtn('account', this);\"/>";
-            document.getElementById("accountbuttons").insertAdjacentElement("afterbegin", div);
-            mapping[result.friendly_name[i]] = result.name[i];
-          }
-          if ((result.name[i].startsWith("Expenses:") || result.name[i].startsWith("Income:")) && result.friendly_name[i])
-          {
-            const div = document.createElement("div");
-            div.innerHTML="<input type=\"button\" value=\""+result.friendly_name[i]+"\" class=\"transactionforminputhalf\" onClick=\"selectBtn('category', this);\"/>";
-            document.getElementById("categorybuttons").insertAdjacentElement("afterbegin", div);
-            mapping[result.friendly_name[i]] = result.name[i];
-          }
-          accountNameToId[result.name[i]] = result.id[i];
-        }
-
-        document.getElementById('addbutton').addEventListener('click', async (ev) => {
-          const account = document.getElementById("account").value;
-          const txnDate = document.getElementById("date").value;
-          const payee = document.getElementById("payee").value;
-          const amount = document.getElementById("amount").value;
-          const comment = document.getElementById("comment").value;
-          const category = document.getElementById("category").value;
-          if (!account)
-          {
-            document.getElementById('message').innerHTML="<span style=\"color: red\">Please select an account</span>";
-            return;
-          }
-          if (!accountNameToId[account])
-          {
-            document.getElementById('message').innerHTML="<span style=\"color: red\">That account doesn't exist yet. Please create it first</span>";
-            return;
-          }
-          if (!txnDate)
-          {
-            document.getElementById('message').innerHTML="<span style=\"color: red\">Please enter a transaction date</span>";
-            return;
-          }
-          if (!payee)
-          {
-            document.getElementById('message').innerHTML="<span style=\"color: red\">Please enter a transaction payee</span>";
-            return;
-          }
-          if (!amount)
-          {
-            document.getElementById('message').innerHTML="<span style=\"color: red\">Please enter a transaction amount</span>";
-            return;
-          }
-          if (!category)
-          {
-            document.getElementById('message').innerHTML="<span style=\"color: red\">Please select a category</span>";
-            return;
-          }
-          if (!accountNameToId[category])
-          {
-            document.getElementById('message').innerHTML="<span style=\"color: red\">That category doesn't exist yet. Please create it first</span>";
-            return;
-          }
-          try
-          {
-            const val = await grist.docApi.applyUserActions([ ["AddRecord", "Transactions", -1, {"date": txnDate, "description": payee}]])
-            const txnId = val.retValues[0];
-
-            await grist.docApi.applyUserActions([ ["AddRecord", "Postings", -1, {"account": accountNameToId[account], "amount": -(new Number(amount)), transaction: txnId}]])
-            await grist.docApi.applyUserActions([ ["AddRecord", "Postings", -1, {"account": accountNameToId[category], "amount": new Number(amount), posting_comment: comment, transaction: txnId}]])
-
-            document.getElementById('message').innerHTML="<span style=\"color: green\">Success! Transaction added</span>";
-            document.getElementById("account").value = "";
-            document.getElementById("payee").value = "";
-            document.getElementById("amount").value = "";
-            document.getElementById("comment").value = "";
-            document.getElementById("category").value = "";
-            selectBtn('account');
-            selectBtn('category');
-          }
-          catch (e)
-          {
-            document.getElementById('message').innerHTML="<span style=\"color: red\">Failed to add transaction!</span>";
-          }
-
-
-        });
-      }
-      //grist.onRecord(function(record, mappings) {
-      //});
-
     </script>
   </body>
 </html>
