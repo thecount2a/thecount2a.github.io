@@ -1,11 +1,6 @@
 const datebuf = 60*60*24*5;
 const datePartsRegex = /[\-\/\Wa-zA-Z]/;
 
-
-const importFilesTest = async function() {
-	return await grist.docApi.fetchTable("Accounts");
-}
-
 const importFiles = async function(fileList) {
 	const csvs = [];
 	for (let i = 0, numFiles = fileList.length; i < numFiles; i++) {
@@ -484,5 +479,258 @@ const genExistingTransactionLookup = function(postings) {
 	}
 	return {existing, ref};
 };
-const matchDataset = function(dataset, existingLookup)  {
+
+const getTextNodes = function(parent){
+	var all = [];
+	for (parent = parent.firstChild; parent; parent = parent.nextSibling) {
+		if (['SCRIPT','STYLE'].indexOf(parent.tagName) >= 0) continue;
+		if (parent.nodeType === Node.TEXT_NODE) all.push(parent);
+		else all = all.concat(getTextNodes(parent));
+	}
+	return all;
+}
+
+const getElementByXpath = function (doc, path) {
+  return document.evaluate(path, doc , null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+}
+
+const getElementsByXpath = function(doc, path) {
+	var results = [];
+	var xpathResult = document.evaluate(
+		path,
+		doc,
+		null,
+		XPathResult.ORDERED_NODE_ITERATOR_TYPE,
+		null
+	);
+	var node;
+	while ((node = xpathResult.iterateNext()) != null) {
+		results.push(node);
+	}
+	return results;
+}
+
+const getXPath = function (node) {
+    var comp, comps = [];
+    var parent = null;
+    var xpath = '';
+    var getPos = function(node)
+    {
+        var position = 1, curNode;
+        if (node.nodeType == Node.ATTRIBUTE_NODE)
+        {
+            return null;
+        }
+        for (curNode = node.previousSibling; curNode; curNode = curNode.previousSibling)
+        {
+            if (curNode.nodeName == node.nodeName)
+            {
+                ++position;
+            }
+        }
+        return position;
+     }
+
+    if (node instanceof Document)
+    {
+        return '/';
+    }
+
+    for (; node && !(node instanceof Document); node = node.nodeType == Node.ATTRIBUTE_NODE ? node.ownerElement : node.parentNode)
+    {
+        comp = comps[comps.length] = {};
+        switch (node.nodeType)
+        {
+            case Node.TEXT_NODE:
+                comp.name = 'text()';
+                break;
+            case Node.ATTRIBUTE_NODE:
+                comp.name = '@' + node.nodeName;
+                break;
+            case Node.PROCESSING_INSTRUCTION_NODE:
+                comp.name = 'processing-instruction()';
+                break;
+            case Node.COMMENT_NODE:
+                comp.name = 'comment()';
+                break;
+            case Node.ELEMENT_NODE:
+                comp.name = node.nodeName;
+                break;
+        }
+        comp.position = getPos(node);
+    }
+
+    for (var i = comps.length - 1; i >= 0; i--)
+    {
+        comp = comps[i];
+        xpath += '/' + comp.name;
+        if (comp.position != null)
+        {
+            xpath += '[' + comp.position + ']';
+        }
+    }
+
+    return xpath;
+}
+
+const getPathBetweenNodes = function(doc, markerElement, targetElement) {
+    var targetXpath = getXPath(targetElement);
+    var markerXpath = getXPath(markerElement);
+    if (markerXpath == targetXpath)
+    {
+        return ".";
+    }
+    var markerPieces = markerXpath.split('/');
+    var targetPieces = targetXpath.split('/');
+    var commonRoot = '';
+    var i = 0;
+    for (i = 0; i < markerPieces.length && i < targetPieces.length; i++)
+    {
+        if (markerPieces[i] == targetPieces[i])
+        {
+            commonRoot = commonRoot.concat(markerPieces[i]).concat('/');
+        }
+        else
+        {
+            break;
+        }
+    }
+    // Cut off last slash
+    commonRoot = commonRoot.slice(0, -1);
+    var commonRootElement = getElementByXpath(doc, commonRoot);
+    if (commonRootElement)
+    {
+        if (i == markerPieces.length || i == targetPieces.length)
+        {
+            // This branch is if a marker is an actual parent or child of the target
+            var pathBetween = '';
+            for (var j = 0; j < (markerPieces.length - i); j++)
+            {
+                pathBetween = pathBetween.concat("../");
+            }
+            for (var j = i; j < targetPieces.length; j++)
+            {
+                pathBetween = pathBetween.concat(targetPieces[j]).concat("/");
+            }
+            // Return our resolved path, minus the trailing slash
+            return pathBetween.slice(0, -1);
+        }
+        else
+        {
+            // This branch is if a marker is not an actual parent or child of the target which means we can step along 
+            //    the siblings of a part of the DOM to keep the final path as relative as possible
+            var commonRootMarkerChild = getElementByXpath(doc, commonRoot + '/' + markerPieces[i]);
+            var commonRootTargetChild = getElementByXpath(doc, commonRoot + '/' + targetPieces[i]);
+            if (commonRootMarkerChild && commonRootTargetChild)
+            {
+                var children = commonRootElement.childNodes;
+                var found = false;
+                var numFound = 0;
+                var pathBetween = '';
+                for (var j = 0; j < (markerPieces.length - i - 1); j++)
+                {
+                    pathBetween = pathBetween.concat("../");
+                }
+                // Scan forward
+                for (var j = 0; j < children.length; j++)
+                {
+                    // If we come across the target but we haven't seen the marker yet, break, we will scan backwards instead
+                    if (children[j] == commonRootTargetChild && !found)
+                    {
+                        break;
+                    }
+                    if (children[j] == commonRootMarkerChild && !found)
+                    {
+                        found = true;
+                    }
+                    else if (found && children[j].nodeType == commonRootTargetChild.nodeType 
+                                   && children[j].nodeName == commonRootTargetChild.nodeName)
+                    {
+                        numFound += 1;
+                    }
+                    // If we come across the target and we have seen the marker, great, let's stop
+                    if (children[j] == commonRootTargetChild)
+                    {
+                        pathBetween = pathBetween.concat("following-sibling::").concat(children[j].nodeName).concat("["+numFound.toString()+"]/");
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    // Scan backwards
+                    for (var j = children.length - 1; j >= 0; j--)
+                    {
+                        // If we come across the target but we haven't seen the marker yet, break
+                        if (children[j] == commonRootTargetChild && !found)
+                        {
+                            break;
+                        }
+                        if (children[j] == commonRootMarkerChild && !found)
+                        {
+                            found = true;
+                        }
+                        else if (found && children[j].nodeType == commonRootTargetChild.nodeType 
+                                       && children[j].nodeName == commonRootTargetChild.nodeName)
+                        {
+                            numFound += 1;
+                        }
+                        // If we come across the target and we have seen the marker, great, let's stop
+                        if (children[j] == commonRootTargetChild)
+                        {
+                            pathBetween = pathBetween.concat("preceding-sibling::").concat(children[j].nodeName).concat("["+numFound.toString()+"]/");
+                            break;
+                        }
+                    }
+                }
+                if (found)
+                {
+                    for (var j = i+1; j < targetPieces.length; j++)
+                    {
+                        pathBetween = pathBetween.concat(targetPieces[j]).concat("/");
+                    }
+                    // Return our resolved path, minus the trailing slash
+                    return pathBetween.slice(0, -1);
+                }
+                else
+                {
+                    return -1;
+                }
+            }
+            else
+            {
+                return -2;
+            }
+        }
+    }
+    else
+    {
+        return -2;
+    }
+}
+
+const quoteXpath = function(val) {
+    let pieces = val.split('\'');
+    if (pieces.length > 1)
+    {
+        let retval = 'concat(';
+        for (let i = 0; i < pieces.length; i++)
+        {
+            if (pieces[i])
+            {
+                retval = retval + '\'' + pieces[i] + '\',';
+                if (i != pieces.length - 1)
+                {
+                    retval = retval + '"\'",';
+                }
+            }
+        }
+        retval = retval.substring(0, retval.length - 1);
+        retval = retval + ')';
+        return retval;
+    }
+    else
+    {
+        return '\''+val+'\'';
+    }
 };
+

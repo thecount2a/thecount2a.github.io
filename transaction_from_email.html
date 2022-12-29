@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Import Transactions from Email</title>
+    <script src="jsdeps/grist-plugin-api.js"></script>
+
+    <link href="https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900|Material+Icons" rel="stylesheet" type="text/css">
+    <link href="jsdeps/quasar.prod-2.10.2.css" rel="stylesheet" type="text/css">
+
+	<script>
+      		var tableId = null;
+
+	      	grist.ready({
+			requiredAccess: 'full'
+	      	});
+	      	grist.on('message', (e) => {
+			if (e.tableId) { tableId = e.tableId; }
+	      	});
+	</script>
+	<script src="lib.js"></script>
+  </head>
+  <body>
+	  <div id="q-app">
+		  <q-list bordered>
+			  <div v-for="email in emails">
+				  <q-expansion-item group="somegroup" :label="email.subject" :caption="email.caption" header-class="text-primary">
+					  <q-card>
+						  <q-card-section>
+							  <transaction-editor :transaction_data="email.txn" :accounts="accounts" :categories="categories"></transaction-editor>
+							  <q-input outlined label="Account Match Pattern" v-model="email.rules.account_match_pattern"></q-input>
+							  <q-input outlined label="Amount Match Pattern" v-model="email.rules.amount_match_pattern"></q-input>
+							  <q-input outlined label="Description Match Pattern" v-model="email.rules.description_match_pattern"></q-input>
+							  <div>Email text:</div>
+							  <div></div>
+							  <div>{{email.text}}</div>
+						  </q-card-section>
+					  </q-card>
+				  </q-expansion-item>
+				  <q-separator></q-separator>
+	  		  </div>
+		  </q-list>
+	  </div>
+	  <!--iframe sandbox="allow-same-origin" width="100%" height="600" id="emailpreview" src="blank.html"></iframe-->
+	  <script src="jsdeps/vue.global.prod-3.2.45.js"></script>
+	  <script src="jsdeps/quasar.umd.prod-2.10.2.js"></script>
+	  <script src="jsdeps/postal-mime.js"></script>
+
+	  <script>
+const { useQuasar } = Quasar;
+const { ref, toRef } = Vue;
+const PostalMime = postalMime.default;
+
+const app = Vue.createApp({
+	setup () {
+		const $q = useQuasar()
+		const processedEmails = [];
+		let postings = null;
+		let lookups = null;
+		const emails = ref([])
+	        const accounts = ref([])
+	        const filteredAccounts = ref([])
+	        filteredAccounts.value = accounts.value
+
+		async function updateEmails () {
+			const emailList = [];
+			const emailPatterns = await grist.docApi.fetchTable("Email_Pattern_Match");
+			const emailRegexes = [];
+			for (let p in emailPatterns.id)
+			{
+				const emailRegex = {};
+				emailRegex.account = emailPatterns.account[p];
+				emailRegex.account_match_regex = new RegExp(emailPatterns.account_match_pattern[p]);
+				if (emailPatterns.amount_match_pattern[p])
+				{
+					emailRegex.amount_match_regex = new RegExp(emailPatterns.amount_match_pattern[p]);
+				}
+				if (emailPatterns.description_match_pattern[p])
+				{
+					emailRegex.description_match_regex = new RegExp(emailPatterns.description_match_pattern[p]);
+				}
+				emailRegexes.push(emailRegex);
+			}
+			for (let i in processedEmails)
+			{
+				let thisEmail = processedEmails[i];
+				if (emails.value.length > 0)
+				{
+					thisEmail = emails.value[i];
+				}
+				else
+				{
+					thisEmail.txn = {};
+					thisEmail.rules = {};
+					thisEmail.txnModified = false;
+				}
+				if (!thisEmail.txnModified)
+				{
+					thisEmail.txn = {};
+					thisEmail.rules = {};
+
+					thisEmail.matchLevel = 0;
+					thisEmail.caption = "No account is found that matches this email.";
+					for (let p in emailRegexes)
+					{
+						if (processedEmails[i].text.match(emailRegexes[p].account_match_regex))
+						{
+							thisEmail.rules.id = p;
+							thisEmail.rules.account_match_pattern = emailPatterns.account_match_pattern[p];
+							thisEmail.rules.amount_match_pattern = emailPatterns.amount_match_pattern[p];
+							thisEmail.rules.description_match_pattern = emailPatterns.description_match_pattern[p];
+
+							thisEmail.txn.account = emailRegexes[p].account;
+							const dateObj = new Date(thisEmail.date)
+							thisEmail.txn.date = dateObj.getFullYear() + '-' + ('0' + (dateObj.getMonth()+1)).slice(-2) + '-' + ('0' + dateObj.getDate()).slice(-2);
+
+							thisEmail.matchLevel = 1;
+							thisEmail.caption = "Account is found that matches this email.";
+							if (emailRegexes[p].amount_match_regex)
+							{
+								const amount_match = processedEmails[i].text.match(emailRegexes[p].amount_match_regex);
+								if (amount_match)
+								{
+									thisEmail.caption = thisEmail.caption + " Amount is also found in this email.";
+									thisEmail.matchLevel++;
+									thisEmail.txn.amount = amount_match[1].replace(/[^0-9\.\-]*/, '');
+								}
+							}
+							if (emailRegexes[p].description_match_regex)
+							{
+								const description_match = processedEmails[i].text.match(emailRegexes[p].description_match_regex);
+								if (description_match)
+								{
+									thisEmail.caption = thisEmail.caption + " Description is also found in this email.";
+									thisEmail.matchLevel++;
+									thisEmail.txn.payee = description_match[1];
+								}
+							}
+
+							break;
+						}
+					}
+				}
+				emailList.push(thisEmail);
+			}
+			emails.value = emailList;
+		};
+
+		async function loadAction () {
+			const accountData = await grist.docApi.fetchTable("Accounts");
+			postings = await grist.docApi.fetchTable("Postings");
+			lookups = genExistingTransactionLookup(postings);
+
+			const accountOptionList = [];
+			for (let i in accountData.id)
+			{
+				accountOptionList.push({label: accountData.name[i], value: accountData.id[i]});
+			}
+			accounts.value = accountOptionList;
+
+			const emailtable = await grist.docApi.fetchTable("Incoming_Transaction_Emails");
+			//const iframe = document.getElementById("emailpreview");
+			//const iframeDoc = iframe.contentWindow || iframe.contentDocument.document || iframe.contentDocument;
+
+			const domParser = new DOMParser();
+			for (let i in emailtable.id)
+			{
+				const processedEmail = {};
+
+				const parser = new PostalMime();
+				const email = await parser.parse(emailtable.contents[i]);
+
+				const doc = domParser.parseFromString(email.html, "text/html");
+
+				const textNodes = getTextNodes(doc);
+				const nonWhitespace = textNodes.filter(node => node.nodeValue.trim().length != 0);
+				//const textInfo = nonWhitespace.map( node => ({ text: node.nodeValue.replace(/^\s*|\s(?=\s)|\s*$/g, ""), parentNodeName: (node.parentNode || { nodeName: null }).nodeName }));
+				const textArray = nonWhitespace.map(node => node.nodeValue.replace(/^\s*|\s(?=\s)|\s*$/g, ""));
+				processedEmail.id = emailtable.id[i];
+				processedEmail.text = textArray.join(" ");
+				processedEmail.subject = emailtable.subject[i];
+				processedEmail.date = email.date;
+				processedEmails.push(processedEmail);
+
+				//console.log(nonWhitespace);
+				//console.log(textInfo);
+				//console.log(email.subject);
+				//for (let i in textInfo)
+				//{
+				//	const xpath = '//'+textInfo[i].parentNodeName+'[contains(normalize-space(text()), '+quoteXpath(textInfo[i].text)+')]';
+				//	textInfo[i].xpath = xpath;
+				//	console.log(xpath);
+				//	const nodes = getElementsByXpath(doc, xpath);
+				//	console.log(nodes.length);
+				//}
+
+				//const pathBetween = getPathBetweenNodes(doc, getElementsByXpath(doc, textInfo[19].xpath)[0], getElementsByXpath(doc, textInfo[20].xpath)[0]);
+				//console.log("pathBetween");
+				//console.log(pathBetween);
+				//const finalNode = getElementsByXpath(doc, textInfo[19].xpath + '/' + pathBetween);
+				//console.log(finalNode.length);
+
+				//const el = getElementByXpath(doc, xpath);
+				//finalNode[0].style.border = "2px solid red";
+			}
+			//iframeDoc.document.open();
+			//iframeDoc.document.write(doc.documentElement.innerHTML);
+			//iframeDoc.document.close();
+
+			await updateEmails();
+		};
+
+		return {
+			emails,
+			accounts,
+		        filteredAccounts,
+			loadAction,
+			updateEmails
+		}
+	},
+	mounted() {
+		this.loadAction();
+	}
+})
+    </script>
+    <script src="transaction_editor.js"></script>
+    <script>
+app.component('transaction-editor', TransactionEditor);
+app.use(Quasar, { config: {} })
+app.mount('#q-app')
+	  </script>
+  </body>
+</html>
