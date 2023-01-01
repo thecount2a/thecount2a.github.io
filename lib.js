@@ -197,6 +197,81 @@ const analyzeRowToMatchAmountDate = function(postings, existing, csv, uniqueAcco
 	}
 };
 
+const doAutoClassifyTxn = function(row, autoClassify, accountIdToName = null)
+{
+	let anythingMatched = false;
+	for (let rule in autoClassify.id)
+	{
+		if (autoClassify.description_match[rule] || autoClassify.amount_match[rule])
+		{
+			let match = true;
+			if (autoClassify.description_match[rule] && row.description.toLowerCase().indexOf(autoClassify.description_match[rule].toLowerCase()) < 0 && autoClassify.description_match[rule].toLowerCase().indexOf(row.description.toLowerCase()) < 0)
+			{
+				match = false;
+			}
+			if (autoClassify.primary_account[rule] && autoClassify.primary_account[rule] != row.account)
+			{
+				match = false;
+			}
+			if (autoClassify.amount_match[rule] && Math.abs(autoClassify.amount_match[rule] - row.amount) > 0.0000001)
+			{
+				match = false;
+			}
+			if (match)
+			{
+				row.category = autoClassify.category_account[rule];
+				if (accountIdToName)
+				{
+					row.categoryAccountName = accountIdToName[autoClassify.category_account[rule]];
+				}
+				if (autoClassify.comment[rule])
+				{
+					row.comment = autoClassify.comment[rule];
+				}
+				anythingMatched = true;
+				break;
+			}
+		}
+	}
+	return anythingMatched;
+};
+
+const doAutoClassify = function(output, autoClassify, accountIdToName)
+{
+	let unknown_expense_account = null;
+	let unknown_income_account = null;
+
+	for (let a in accountIdToName)
+	{
+		if (accountIdToName[a].toLowerCase().indexOf("expenses:") == 0 && accountIdToName[a].toLowerCase().indexOf("unknown") >= 0)
+		{
+			unknown_expense_account = parseInt(a);
+		}
+		else if (accountIdToName[a].toLowerCase().indexOf("income:") == 0 && accountIdToName[a].toLowerCase().indexOf("unknown") >= 0)
+		{
+			unknown_income_account = parseInt(a);
+		}
+	}
+
+	if (unknown_expense_account !== null)
+	{
+		for (let t in output)
+		{
+			const anythingMatched = doAutoClassifyTxn(output[t], autoClassify, accountIdToName);
+			if (!anythingMatched)
+			{
+				output[t].category = unknown_expense_account;
+				output[t].categoryAccountName = accountIdToName[unknown_expense_account];
+				if (output[t].amount > -0.00000001 && unknown_income_account !== null)
+				{
+					output[t].category = unknown_income_account;
+					output[t].categoryAccountName = accountIdToName[unknown_income_account];
+				}
+			}
+		}
+	}
+};
+
 const matchPostings = function(postings, lookups, dataSet, thisDateYear, accountIdToName) {
 	const csv = dataSet.csv;
 	const newTransactions = [];
@@ -227,7 +302,7 @@ const matchPostings = function(postings, lookups, dataSet, thisDateYear, account
 			else
 			{
 				const formattedDate = new Date(resolvedDate.getTime() - (resolvedDate.getTimezoneOffset() * 60000 )).toISOString().split("T")[0];
-				newTransactions.push({account: dataSet.account, accountName: accountIdToName[dataSet.account], amount: resolvedAmounts[dataSet.amountType], date: formattedDate, description: csv[i][dataSet.descriptionColumns[dataSet.descriptionColumn].index], categoryAccount: null, categoryAccountName: null, commment: ""});
+				newTransactions.push({account: dataSet.account, accountName: accountIdToName[dataSet.account], amount: resolvedAmounts[dataSet.amountType], date: formattedDate, description: csv[i][dataSet.descriptionColumns[dataSet.descriptionColumn].index], category: null, categoryAccountName: null, comment: ""});
 			}
 		}
 	}

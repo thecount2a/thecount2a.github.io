@@ -39,13 +39,6 @@ const app = Vue.createApp({
 		txn.value.date = MyDateString;
 
 		const addTransaction = async function() {
-			console.log(txn.value.account);
-			console.log(txn.value.date);
-			console.log(txn.value.payee);
-			console.log(txn.value.amount);
-			console.log(txn.value.comment);
-			console.log(txn.value.category);
-
 			successMessage.value="";
 			if (txn.value.account === null || txn.value.account === undefined)
 			{
@@ -57,7 +50,7 @@ const app = Vue.createApp({
 			  errorMessage.value="Please enter a transaction date";
 			  return;
 			}
-			if (!txn.value.payee)
+			if (!txn.value.description)
 			{
 			  errorMessage.value="Please enter a transaction description";
 			  return;
@@ -74,7 +67,7 @@ const app = Vue.createApp({
 			}
 			try
 			{
-			  const val = await grist.docApi.applyUserActions([ ["AddRecord", "Transactions", -1, {"date": txn.value.date, "description": txn.value.payee}]])
+			  const val = await grist.docApi.applyUserActions([ ["AddRecord", "Transactions", -1, {"date": txn.value.date, "description": txn.value.description}]])
 			  const txnId = val.retValues[0];
 
 			  await grist.docApi.applyUserActions([ ["AddRecord", "Postings", -1, {"account": txn.value.account, "amount": -(new Number(txn.value.amount)), transaction: txnId}]])

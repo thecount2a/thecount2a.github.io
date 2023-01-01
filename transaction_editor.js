@@ -54,7 +54,7 @@ const TransactionEditor = {
       </template>
     </q-input>
 
-    <q-input v-model="transaction_data.payee" label="Description/Payee" outlined></q-input>
+    <q-input v-model="transaction_data.description" label="Description/Payee" outlined></q-input>
     <q-input v-model="transaction_data.amount" type="number" label="Amount($)" outlined></q-input>
     <q-input v-model="transaction_data.comment" label="Comment" outlined></q-input>
     <q-select input-debounce="0" map-options use-input @filter="filterCategoriesFn" outlined emit-value v-model="transaction_data.category" :options="filteredCategories" label="Category"></q-select>

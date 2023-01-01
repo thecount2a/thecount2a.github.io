@@ -24,10 +24,12 @@
 	  <div id="q-app">
 		  <q-list bordered>
 			  <div v-for="email in emails">
-				  <q-expansion-item group="somegroup" :label="email.subject" :caption="email.caption" header-class="text-primary">
+				  <q-expansion-item group="somegroup" :label="email.txn.date+' - '+email.subject" :caption="email.caption" header-class="text-primary">
 					  <q-card>
 						  <q-card-section>
-							  <transaction-editor :transaction_data="email.txn" :accounts="accounts" :categories="categories"></transaction-editor>
+							  <transaction-editor :transaction_data="email.txn" :accounts="accounts" :categories="accounts"></transaction-editor>
+							  <q-toggle v-model="email.mark_email_resolved" label="Mark Email Resolved"></q-toggle>
+							  <q-toggle v-model="email.skip_adding_transaction" label="Skip Adding Transaction"></q-toggle>
 							  <q-input outlined label="Account Match Pattern" v-model="email.rules.account_match_pattern"></q-input>
 							  <q-input outlined label="Amount Match Pattern" v-model="email.rules.amount_match_pattern"></q-input>
 							  <q-input outlined label="Description Match Pattern" v-model="email.rules.description_match_pattern"></q-input>
@@ -56,15 +58,75 @@ const app = Vue.createApp({
 		const $q = useQuasar()
 		const processedEmails = [];
 		let postings = null;
-		let lookups = null;
 		const emails = ref([])
 	        const accounts = ref([])
 	        const filteredAccounts = ref([])
 	        filteredAccounts.value = accounts.value
 
+		const datebuf = 60*60*24*5;
+		async function matchTransactions () {
+			const lookups = genExistingTransactionLookup(postings);
+			const newTransactions = [];
+			for (let i in emails.value)
+			{
+				const thisTxn = emails.value[i].txn;
+				const thisTxnDate = (thisTxn.date || '').split('-')
+				if (thisTxn.date && thisTxnDate.length == 3 && thisTxn.description && thisTxn.account && thisTxn.category && thisTxn.amount)
+				{
+					const dateObj = new Date(parseInt(thisTxnDate[0]), parseInt(thisTxnDate[1])-1, parseInt(thisTxnDate[2]));
+					const timeperiods = Math.floor(dateObj.getTime() / 1000 / datebuf);
+					const thisAmount = parseFloat(thisTxn.amount);
+					const refKey = genTransactionLookupKey(thisTxn.account, thisAmount, timeperiods);
+					const refKeyMinus = genTransactionLookupKey(thisTxn.account, thisAmount, timeperiods-1);
+					const refKeyPlus = genTransactionLookupKey(thisTxn.account, thisAmount, timeperiods+1);
+					if (lookups.existing[refKey])
+					{
+						console.log("Match");
+						lookups.existing[refKey] = lookups.existing[refKey] - 1;
+						if (!emails.value[i].txnModified)
+						{
+							emails.value[i].skip_adding_transaction = true;
+						}
+					}
+					else if (lookups.existing[refKeyMinus])
+					{
+						console.log("Did minus fuzzy date match");
+						lookups.existing[refKeyMinus] = lookups.existing[refKeyMinus] - 1;
+						if (!emails.value[i].txnModified)
+						{
+							emails.value[i].skip_adding_transaction = true;
+						}
+					}
+					else if (lookups.existing[refKeyPlus])
+					{
+						console.log("Did plus fuzzy date match");
+						lookups.existing[refKeyPlus] = lookups.existing[refKeyPlus] - 1;
+						if (!emails.value[i].txnModified)
+						{
+							emails.value[i].skip_adding_transaction = true;
+						}
+					}
+					else
+					{
+						console.log("No match");
+						if (!emails.value[i].txnModified)
+						{
+							emails.value[i].skip_adding_transaction = false;
+						}
+					}
+					if (!emails.value[i].skip_adding_transaction)
+					{
+						newTransactions.push({account: thisTxn.account, amount: thisAmount, date: thisTxn.date, description: thisTxn.description, category: thisTxn.category, comment: thisTxn.comment});
+					}
+
+				}
+			}
+		};
+
 		async function updateEmails () {
 			const emailList = [];
 			const emailPatterns = await grist.docApi.fetchTable("Email_Pattern_Match");
+			const autoClassify = await grist.docApi.fetchTable("Auto_Classify");
 			const emailRegexes = [];
 			for (let p in emailPatterns.id)
 			{
@@ -93,6 +155,8 @@ const app = Vue.createApp({
 					thisEmail.txn = {};
 					thisEmail.rules = {};
 					thisEmail.txnModified = false;
+					thisEmail.mark_email_resolved = true;
+					thisEmail.skip_adding_transaction = false;
 				}
 				if (!thisEmail.txnModified)
 				{
@@ -101,8 +165,12 @@ const app = Vue.createApp({
 
 					thisEmail.matchLevel = 0;
 					thisEmail.caption = "No account is found that matches this email.";
+
+					const dateObj = new Date(thisEmail.date)
+					thisEmail.txn.date = dateObj.getFullYear() + '-' + ('0' + (dateObj.getMonth()+1)).slice(-2) + '-' + ('0' + dateObj.getDate()).slice(-2);
 					for (let p in emailRegexes)
 					{
+						
 						if (processedEmails[i].text.match(emailRegexes[p].account_match_regex))
 						{
 							thisEmail.rules.id = p;
@@ -111,8 +179,6 @@ const app = Vue.createApp({
 							thisEmail.rules.description_match_pattern = emailPatterns.description_match_pattern[p];
 
 							thisEmail.txn.account = emailRegexes[p].account;
-							const dateObj = new Date(thisEmail.date)
-							thisEmail.txn.date = dateObj.getFullYear() + '-' + ('0' + (dateObj.getMonth()+1)).slice(-2) + '-' + ('0' + dateObj.getDate()).slice(-2);
 
 							thisEmail.matchLevel = 1;
 							thisEmail.caption = "Account is found that matches this email.";
@@ -133,9 +199,10 @@ const app = Vue.createApp({
 								{
 									thisEmail.caption = thisEmail.caption + " Description is also found in this email.";
 									thisEmail.matchLevel++;
-									thisEmail.txn.payee = description_match[1];
+									thisEmail.txn.description = description_match[1];
 								}
 							}
+							doAutoClassifyTxn(thisEmail.txn, autoClassify);
 
 							break;
 						}
@@ -149,7 +216,6 @@ const app = Vue.createApp({
 		async function loadAction () {
 			const accountData = await grist.docApi.fetchTable("Accounts");
 			postings = await grist.docApi.fetchTable("Postings");
-			lookups = genExistingTransactionLookup(postings);
 
 			const accountOptionList = [];
 			for (let i in accountData.id)
@@ -208,6 +274,7 @@ const app = Vue.createApp({
 			//iframeDoc.document.close();
 
 			await updateEmails();
+			await matchTransactions();
 		};
 
 		return {
