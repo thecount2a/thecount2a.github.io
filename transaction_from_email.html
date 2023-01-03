@@ -24,7 +24,26 @@
 	  <div id="q-app">
 		  <q-list bordered>
 			  <div v-for="email in emails">
-				  <q-expansion-item group="somegroup" :label="email.txn.date+' - '+email.subject" :caption="email.caption" header-class="text-primary">
+				  <q-expansion-item group="somegroup" header-class="text-primary">
+					  <template v-slot:header>
+						  <q-item-section avatar>
+							  <q-avatar :icon="email.txn.account && ((email.txn.amount && email.txn.description && email.txn.category) || email.skip_adding_transaction) ? 'done' : 'error'" :color="email.txn.account ? ((((email.txn.amount && email.txn.description && email.txn.category) || email.skip_adding_transaction)) ? (email.skip_adding_transaction ? 'purple' : 'green') : 'yellow') : 'red'" text-color="white"></q-avatar>
+						  </q-item-section>
+						  <q-item-section>
+							  <div>{{email.txn.date}} - {{email.subject}} - ${{email.txn.amount}} - {{email.txn.description}}</div>
+							  <div>
+								<q-chip v-if="email.txn.account" icon="done" text-color="white" color="primary">Account</q-chip>
+								<q-chip v-else icon="error" text-color="white" color="red">Account</q-chip>
+								<q-chip v-if="email.txn.amount" icon="done" text-color="white" color="primary">Amount</q-chip>
+								<q-chip v-else icon="error" text-color="white" color="red">Amount</q-chip>
+								<q-chip v-if="email.txn.description" icon="done" text-color="white" color="primary">Description</q-chip>
+								<q-chip v-else icon="error" text-color="white" color="red">Description</q-chip>
+								<q-chip v-if="email.txn.category" icon="done" text-color="white" color="primary">Category</q-chip>
+								<q-chip v-else icon="error" text-color="white" color="red">Category</q-chip>
+							  </div>
+						  </q-item-section>
+
+					  </template>
 					  <q-card>
 						  <q-card-section>
 							  <transaction-editor :transaction_data="email.txn" :accounts="accounts" :categories="accounts"></transaction-editor>
@@ -71,7 +90,7 @@ const app = Vue.createApp({
 			{
 				const thisTxn = emails.value[i].txn;
 				const thisTxnDate = (thisTxn.date || '').split('-')
-				if (thisTxn.date && thisTxnDate.length == 3 && thisTxn.description && thisTxn.account && thisTxn.category && thisTxn.amount)
+				if (thisTxn.date && thisTxnDate.length == 3 && thisTxn.description && thisTxn.account && thisTxn.amount)
 				{
 					const dateObj = new Date(parseInt(thisTxnDate[0]), parseInt(thisTxnDate[1])-1, parseInt(thisTxnDate[2]));
 					const timeperiods = Math.floor(dateObj.getTime() / 1000 / datebuf);
@@ -81,7 +100,6 @@ const app = Vue.createApp({
 					const refKeyPlus = genTransactionLookupKey(thisTxn.account, thisAmount, timeperiods+1);
 					if (lookups.existing[refKey])
 					{
-						console.log("Match");
 						lookups.existing[refKey] = lookups.existing[refKey] - 1;
 						if (!emails.value[i].txnModified)
 						{
@@ -108,7 +126,6 @@ const app = Vue.createApp({
 					}
 					else
 					{
-						console.log("No match");
 						if (!emails.value[i].txnModified)
 						{
 							emails.value[i].skip_adding_transaction = false;
@@ -181,15 +198,25 @@ const app = Vue.createApp({
 							thisEmail.txn.account = emailRegexes[p].account;
 
 							thisEmail.matchLevel = 1;
-							thisEmail.caption = "Account is found that matches this email.";
+							let bothMatched = 0;
 							if (emailRegexes[p].amount_match_regex)
 							{
 								const amount_match = processedEmails[i].text.match(emailRegexes[p].amount_match_regex);
 								if (amount_match)
 								{
-									thisEmail.caption = thisEmail.caption + " Amount is also found in this email.";
-									thisEmail.matchLevel++;
+									bothMatched++;
 									thisEmail.txn.amount = amount_match[1].replace(/[^0-9\.\-]*/, '');
+									if (emailPatterns.invert_amount[p])
+									{
+										if (thisEmail.txn.amount.indexOf('-') == 0)
+										{
+											thisEmail.txn.amount = thisEmail.txn.amount.replace('-', '');
+										}
+										else
+										{
+											thisEmail.txn.amount = '-' + thisEmail.txn.amount;
+										}
+									}
 								}
 							}
 							if (emailRegexes[p].description_match_regex)
@@ -198,7 +225,7 @@ const app = Vue.createApp({
 								if (description_match)
 								{
 									thisEmail.caption = thisEmail.caption + " Description is also found in this email.";
-									thisEmail.matchLevel++;
+									bothMatched++;
 									thisEmail.txn.description = description_match[1];
 								}
 							}
