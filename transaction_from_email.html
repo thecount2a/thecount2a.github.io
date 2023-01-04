@@ -69,6 +69,8 @@
 				  <q-separator></q-separator>
 	  		  </div>
 		  </q-list>
+		  <div style="height: 20px; text-align: center; text-decoration: bold;"><span style="color: red">{{errorMessage}}</span><span style="color: green">{{successMessage}}</span></div>
+		  <q-btn label="Import" @click="importAction()" :disable="!emails || emails.length == 0"></q-btn>
 	  </div>
 	  <!--iframe sandbox="allow-same-origin" width="100%" height="600" id="emailpreview" src="blank.html"></iframe-->
 	  <script src="jsdeps/vue.global.prod-3.2.45.js"></script>
@@ -88,12 +90,58 @@ const app = Vue.createApp({
 		const emails = ref([])
 	        const accounts = ref([])
 	        const categories = ref([])
+		const errorMessage = ref("");
+		const successMessage = ref("");
 		let accountIdToName = {};
 
-		const datebuf = 60*60*24*5;
+		async function importAction () {
+			const updates = [];
+			successMessage.value = "Processing...";
+			errorMessage.value = "";
+			for (let i in emails.value)
+			{
+				if (!emails.value[i].skip_adding_transaction)
+				{
+					const thisTxn = emails.value[i].txn;
+					const thisTxnDate = (thisTxn.date || '').split('-')
+					if (thisTxn.date && thisTxnDate.length == 3 && thisTxn.description && thisTxn.account && thisTxn.amount && thisTxn.category)
+					{
+						const thisAmount = parseFloat(thisTxn.amount);
+						updates.push({account: thisTxn.account, amount: thisAmount, date: thisTxn.date, description: thisTxn.description, category: thisTxn.category, comment: thisTxn.comment});
+					}
+					else
+					{
+						successMessage.value = "";
+						errorMessage.value = "Some transaction(s) are missing required data. Review any transactions highlighted red or yellow.";
+						return;
+					}
+				}
+				if (emails.value[i].mark_email_resolved)
+				{
+					updates.push({markResolvedId: emails.value[i].id});
+				}
+			}
+			for (let r in updates)
+			{
+				if (updates[r].markResolvedId)
+				{
+					await grist.docApi.applyUserActions([ ["UpdateRecord", "Incoming_Transaction_Emails", updates[r].markResolvedId, {processed: true}]])
+				}
+				else
+				{
+					const val = await grist.docApi.applyUserActions([ ["AddRecord", "Transactions", -1, {"date": updates[r].date, "description": updates[r].description}]])
+					const txnId = val.retValues[0];
+
+					await grist.docApi.applyUserActions([ ["AddRecord", "Postings", -1, {"account": updates[r].account, "amount": updates[r].amount, transaction: txnId}]])
+					await grist.docApi.applyUserActions([ ["AddRecord", "Postings", -1, {"account": updates[r].category, "amount": -updates[r].amount, posting_comment: updates[r].comment, posting_status: "EI", transaction: txnId}]])
+				}
+			}
+			successMessage.value = "All transactions were successfully imported.";
+			errorMessage.value = "";
+		};
+
 		async function matchTransactions () {
 			const lookups = genExistingTransactionLookup(postings);
-			const newTransactions = [];
 			for (let i in emails.value)
 			{
 				const thisTxn = emails.value[i].txn;
@@ -143,11 +191,6 @@ const app = Vue.createApp({
 							emails.value[i].skip_adding_transaction = false;
 						}
 					}
-					if (!emails.value[i].skip_adding_transaction)
-					{
-						newTransactions.push({account: thisTxn.account, amount: thisAmount, date: thisTxn.date, description: thisTxn.description, category: thisTxn.category, comment: thisTxn.comment});
-					}
-
 				}
 			}
 		};
@@ -226,11 +269,6 @@ const app = Vue.createApp({
 										}
 									}
 								}
-								else
-								{
-									console.log("Matching: "+emailRegexes[p].amount_match_regex);
-									console.log(processedEmails[i].text);
-								}
 							}
 							thisEmail.txn.description = "";
 							if (emailRegexes[p].description_match_regex)
@@ -290,43 +328,46 @@ const app = Vue.createApp({
 			const domParser = new DOMParser();
 			for (let i in emailtable.id)
 			{
-				const processedEmail = {};
+				if (!emailtable.processed[i])
+				{
+					const processedEmail = {};
 
-				const parser = new PostalMime();
-				const email = await parser.parse(emailtable.contents[i]);
+					const parser = new PostalMime();
+					const email = await parser.parse(emailtable.contents[i]);
 
-				const doc = domParser.parseFromString(email.html, "text/html");
+					const doc = domParser.parseFromString(email.html, "text/html");
 
-				const textNodes = getTextNodes(doc);
-				const nonWhitespace = textNodes.filter(node => node.nodeValue.trim().replace(/\u00a0/g, " ").length != 0);
-				//const textInfo = nonWhitespace.map( node => ({ text: node.nodeValue.replace(/^\s*|\s(?=\s)|\s*$/g, ""), parentNodeName: (node.parentNode || { nodeName: null }).nodeName }));
-				const textArray = nonWhitespace.map(node => node.nodeValue.replace(/\u00a0/g, " ").replace(/^\s*|\s(?=\s)|\s*$/g, ""));
-				processedEmail.id = emailtable.id[i];
-				processedEmail.text = textArray.join(" ");
-				processedEmail.subject = emailtable.subject[i];
-				processedEmail.date = email.date;
-				processedEmails.push(processedEmail);
+					const textNodes = getTextNodes(doc);
+					const nonWhitespace = textNodes.filter(node => node.nodeValue.trim().replace(/\u00a0/g, " ").length != 0);
+					//const textInfo = nonWhitespace.map( node => ({ text: node.nodeValue.replace(/^\s*|\s(?=\s)|\s*$/g, ""), parentNodeName: (node.parentNode || { nodeName: null }).nodeName }));
+					const textArray = nonWhitespace.map(node => node.nodeValue.replace(/\u00a0/g, " ").replace(/^\s*|\s(?=\s)|\s*$/g, ""));
+					processedEmail.id = emailtable.id[i];
+					processedEmail.text = textArray.join(" ");
+					processedEmail.subject = emailtable.subject[i];
+					processedEmail.date = email.date;
+					processedEmails.push(processedEmail);
 
-				//console.log(nonWhitespace);
-				//console.log(textInfo);
-				//console.log(email.subject);
-				//for (let i in textInfo)
-				//{
-				//	const xpath = '//'+textInfo[i].parentNodeName+'[contains(normalize-space(text()), '+quoteXpath(textInfo[i].text)+')]';
-				//	textInfo[i].xpath = xpath;
-				//	console.log(xpath);
-				//	const nodes = getElementsByXpath(doc, xpath);
-				//	console.log(nodes.length);
-				//}
+					//console.log(nonWhitespace);
+					//console.log(textInfo);
+					//console.log(email.subject);
+					//for (let i in textInfo)
+					//{
+					//	const xpath = '//'+textInfo[i].parentNodeName+'[contains(normalize-space(text()), '+quoteXpath(textInfo[i].text)+')]';
+					//	textInfo[i].xpath = xpath;
+					//	console.log(xpath);
+					//	const nodes = getElementsByXpath(doc, xpath);
+					//	console.log(nodes.length);
+					//}
 
-				//const pathBetween = getPathBetweenNodes(doc, getElementsByXpath(doc, textInfo[19].xpath)[0], getElementsByXpath(doc, textInfo[20].xpath)[0]);
-				//console.log("pathBetween");
-				//console.log(pathBetween);
-				//const finalNode = getElementsByXpath(doc, textInfo[19].xpath + '/' + pathBetween);
-				//console.log(finalNode.length);
+					//const pathBetween = getPathBetweenNodes(doc, getElementsByXpath(doc, textInfo[19].xpath)[0], getElementsByXpath(doc, textInfo[20].xpath)[0]);
+					//console.log("pathBetween");
+					//console.log(pathBetween);
+					//const finalNode = getElementsByXpath(doc, textInfo[19].xpath + '/' + pathBetween);
+					//console.log(finalNode.length);
 
-				//const el = getElementByXpath(doc, xpath);
-				//finalNode[0].style.border = "2px solid red";
+					//const el = getElementByXpath(doc, xpath);
+					//finalNode[0].style.border = "2px solid red";
+				}
 			}
 			//iframeDoc.document.open();
 			//iframeDoc.document.write(doc.documentElement.innerHTML);
@@ -342,6 +383,9 @@ const app = Vue.createApp({
 			categories,
 			accountIdToName,
 			loadAction,
+			importAction,
+			errorMessage,
+			successMessage,
 			updateEmails
 		}
 	},
