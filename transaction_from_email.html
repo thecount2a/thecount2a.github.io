@@ -27,10 +27,10 @@
 				  <q-expansion-item group="somegroup" header-class="text-primary">
 					  <template v-slot:header>
 						  <q-item-section avatar>
-							  <q-avatar :icon="email.txn.account && ((email.txn.amount && email.txn.description && email.txn.category) || email.skip_adding_transaction) ? 'done' : 'error'" :color="email.txn.account ? ((((email.txn.amount && email.txn.description && email.txn.category) || email.skip_adding_transaction)) ? (email.skip_adding_transaction ? 'purple' : 'green') : 'yellow') : 'red'" text-color="white"></q-avatar>
+							  <q-avatar :icon="((email.txn.account && email.txn.amount && email.txn.description && email.txn.category) || email.skip_adding_transaction) ? 'done' : 'error'" :color="email.txn.account ? ((((email.txn.amount && email.txn.description && email.txn.category) || email.skip_adding_transaction)) ? (email.skip_adding_transaction ? 'purple' : 'green') : 'yellow') : 'red'" text-color="white"></q-avatar>
 						  </q-item-section>
 						  <q-item-section>
-							  <div>{{email.txn.date}} - {{email.subject}} - ${{email.txn.amount}} - {{email.txn.description}}</div>
+							  <div>{{email.txn.date}} - {{email.subject}} - ${{email.txn.amount}} - {{email.txn.description}}{{ email.txn.category ? " - Category: " +accountIdToName[email.txn.category] : "" }}</div>
 							  <div>
 								<q-chip v-if="email.txn.account" icon="done" text-color="white" color="primary">Account</q-chip>
 								<q-chip v-else icon="error" text-color="white" color="red">Account</q-chip>
@@ -40,21 +40,29 @@
 								<q-chip v-else icon="error" text-color="white" color="red">Description</q-chip>
 								<q-chip v-if="email.txn.category" icon="done" text-color="white" color="primary">Category</q-chip>
 								<q-chip v-else icon="error" text-color="white" color="red">Category</q-chip>
+								<q-chip v-if="email.likelyDuplicate" text-color="white" color="purple">Likely Duplicate</q-chip>
+								<q-chip v-else-if="email.skip_adding_transaction" text-color="white" color="purple">Skip Adding</q-chip>
 							  </div>
 						  </q-item-section>
 
 					  </template>
 					  <q-card>
 						  <q-card-section>
-							  <transaction-editor :transaction_data="email.txn" :accounts="accounts" :categories="accounts"></transaction-editor>
+							  <transaction-editor :transaction_data="email.txn" :accounts="accounts" :categories="categories"></transaction-editor>
 							  <q-toggle v-model="email.mark_email_resolved" label="Mark Email Resolved"></q-toggle>
 							  <q-toggle v-model="email.skip_adding_transaction" label="Skip Adding Transaction"></q-toggle>
-							  <q-input outlined label="Account Match Pattern" v-model="email.rules.account_match_pattern"></q-input>
-							  <q-input outlined label="Amount Match Pattern" v-model="email.rules.amount_match_pattern"></q-input>
-							  <q-input outlined label="Description Match Pattern" v-model="email.rules.description_match_pattern"></q-input>
-							  <div>Email text:</div>
-							  <div></div>
-							  <div>{{email.text}}</div>
+							  <q-list padding bordered class="rounded-borders">
+							  <q-expansion-item expand-separator label="Pattern Match Info" header-class="text-primary">
+								  <q-card><q-card-section>
+									  <q-input outlined label="Account Match Pattern" v-model="email.rules.account_match_pattern"></q-input>
+									  <q-input outlined label="Amount Match Pattern" v-model="email.rules.amount_match_pattern"></q-input>
+									  <q-input outlined label="Description Match Pattern" v-model="email.rules.description_match_pattern"></q-input>
+									  <div>Email text:</div>
+									  <div></div>
+									  <div>{{email.text}}</div>
+								  </q-card-section></q-card>
+							  </q-expansion-item>
+							  </q-list>
 						  </q-card-section>
 					  </q-card>
 				  </q-expansion-item>
@@ -79,8 +87,8 @@ const app = Vue.createApp({
 		let postings = null;
 		const emails = ref([])
 	        const accounts = ref([])
-	        const filteredAccounts = ref([])
-	        filteredAccounts.value = accounts.value
+	        const categories = ref([])
+		let accountIdToName = {};
 
 		const datebuf = 60*60*24*5;
 		async function matchTransactions () {
@@ -100,6 +108,7 @@ const app = Vue.createApp({
 					const refKeyPlus = genTransactionLookupKey(thisTxn.account, thisAmount, timeperiods+1);
 					if (lookups.existing[refKey])
 					{
+						emails.value[i].likelyDuplicate = true;
 						lookups.existing[refKey] = lookups.existing[refKey] - 1;
 						if (!emails.value[i].txnModified)
 						{
@@ -108,6 +117,7 @@ const app = Vue.createApp({
 					}
 					else if (lookups.existing[refKeyMinus])
 					{
+						emails.value[i].likelyDuplicate = true;
 						console.log("Did minus fuzzy date match");
 						lookups.existing[refKeyMinus] = lookups.existing[refKeyMinus] - 1;
 						if (!emails.value[i].txnModified)
@@ -117,6 +127,7 @@ const app = Vue.createApp({
 					}
 					else if (lookups.existing[refKeyPlus])
 					{
+						emails.value[i].likelyDuplicate = true;
 						console.log("Did plus fuzzy date match");
 						lookups.existing[refKeyPlus] = lookups.existing[refKeyPlus] - 1;
 						if (!emails.value[i].txnModified)
@@ -126,6 +137,7 @@ const app = Vue.createApp({
 					}
 					else
 					{
+						emails.value[i].likelyDuplicate = false;
 						if (!emails.value[i].txnModified)
 						{
 							emails.value[i].skip_adding_transaction = false;
@@ -180,8 +192,6 @@ const app = Vue.createApp({
 					thisEmail.txn = {};
 					thisEmail.rules = {};
 
-					thisEmail.matchLevel = 0;
-					thisEmail.caption = "No account is found that matches this email.";
 
 					const dateObj = new Date(thisEmail.date)
 					thisEmail.txn.date = dateObj.getFullYear() + '-' + ('0' + (dateObj.getMonth()+1)).slice(-2) + '-' + ('0' + dateObj.getDate()).slice(-2);
@@ -197,15 +207,13 @@ const app = Vue.createApp({
 
 							thisEmail.txn.account = emailRegexes[p].account;
 
-							thisEmail.matchLevel = 1;
-							let bothMatched = 0;
+							thisEmail.txn.amount = "";
 							if (emailRegexes[p].amount_match_regex)
 							{
 								const amount_match = processedEmails[i].text.match(emailRegexes[p].amount_match_regex);
 								if (amount_match)
 								{
-									bothMatched++;
-									thisEmail.txn.amount = amount_match[1].replace(/[^0-9\.\-]*/, '');
+									thisEmail.txn.amount = amount_match[1].replace(/[^0-9\.\-]*/g, '');
 									if (emailPatterns.invert_amount[p])
 									{
 										if (thisEmail.txn.amount.indexOf('-') == 0)
@@ -218,14 +226,18 @@ const app = Vue.createApp({
 										}
 									}
 								}
+								else
+								{
+									console.log("Matching: "+emailRegexes[p].amount_match_regex);
+									console.log(processedEmails[i].text);
+								}
 							}
+							thisEmail.txn.description = "";
 							if (emailRegexes[p].description_match_regex)
 							{
 								const description_match = processedEmails[i].text.match(emailRegexes[p].description_match_regex);
 								if (description_match)
 								{
-									thisEmail.caption = thisEmail.caption + " Description is also found in this email.";
-									bothMatched++;
 									thisEmail.txn.description = description_match[1];
 								}
 							}
@@ -244,12 +256,32 @@ const app = Vue.createApp({
 			const accountData = await grist.docApi.fetchTable("Accounts");
 			postings = await grist.docApi.fetchTable("Postings");
 
-			const accountOptionList = [];
+			const friendlyAccounts = [];
+			const otherAccounts = [];
+			const friendlyCategories = [];
+			const otherCategories = [];
 			for (let i in accountData.id)
 			{
-				accountOptionList.push({label: accountData.name[i], value: accountData.id[i]});
+				accountIdToName[accountData.id[i].toString()] = accountData.name[i];
+				if ((accountData.name[i].startsWith("Assets:") || accountData.name[i].startsWith("Liabilities:")) && accountData.friendly_name[i])
+				{
+					friendlyAccounts.push({value: accountData.id[i], label: accountData.friendly_name[i]});
+				}
+				else
+				{
+					otherAccounts.push({value: accountData.id[i], label: accountData.name[i]});
+				}
+				if ((accountData.name[i].startsWith("Expenses:") || accountData.name[i].startsWith("Income:")) && accountData.friendly_name[i])
+				{
+					friendlyCategories.push({value: accountData.id[i], label: accountData.friendly_name[i]});
+				}
+				else
+				{
+					otherCategories.push({value: accountData.id[i], label: accountData.name[i]});
+				}
 			}
-			accounts.value = accountOptionList;
+			accounts.value = friendlyAccounts.concat(otherAccounts);
+			categories.value = friendlyCategories.concat(otherCategories);
 
 			const emailtable = await grist.docApi.fetchTable("Incoming_Transaction_Emails");
 			//const iframe = document.getElementById("emailpreview");
@@ -266,9 +298,9 @@ const app = Vue.createApp({
 				const doc = domParser.parseFromString(email.html, "text/html");
 
 				const textNodes = getTextNodes(doc);
-				const nonWhitespace = textNodes.filter(node => node.nodeValue.trim().length != 0);
+				const nonWhitespace = textNodes.filter(node => node.nodeValue.trim().replace(/\u00a0/g, " ").length != 0);
 				//const textInfo = nonWhitespace.map( node => ({ text: node.nodeValue.replace(/^\s*|\s(?=\s)|\s*$/g, ""), parentNodeName: (node.parentNode || { nodeName: null }).nodeName }));
-				const textArray = nonWhitespace.map(node => node.nodeValue.replace(/^\s*|\s(?=\s)|\s*$/g, ""));
+				const textArray = nonWhitespace.map(node => node.nodeValue.replace(/\u00a0/g, " ").replace(/^\s*|\s(?=\s)|\s*$/g, ""));
 				processedEmail.id = emailtable.id[i];
 				processedEmail.text = textArray.join(" ");
 				processedEmail.subject = emailtable.subject[i];
@@ -307,7 +339,8 @@ const app = Vue.createApp({
 		return {
 			emails,
 			accounts,
-		        filteredAccounts,
+			categories,
+			accountIdToName,
 			loadAction,
 			updateEmails
 		}
