@@ -205,7 +205,7 @@ const doAutoClassifyTxn = function(row, autoClassify, accountIdToName = null)
 		if (autoClassify.description_match[rule] || autoClassify.amount_match[rule])
 		{
 			let match = true;
-			if (autoClassify.description_match[rule] && row.description.toLowerCase().indexOf(autoClassify.description_match[rule].toLowerCase()) < 0 && autoClassify.description_match[rule].toLowerCase().indexOf(row.description.toLowerCase()) < 0)
+			if (autoClassify.description_match[rule] && row.description.toLowerCase().indexOf(autoClassify.description_match[rule].toLowerCase()) < 0)
 			{
 				match = false;
 			}
