@@ -48,9 +48,9 @@
 					  </template>
 					  <q-card>
 						  <q-card-section>
-							  <transaction-editor :transaction_data="email.txn" :accounts="accounts" :categories="categories"></transaction-editor>
-							  <q-toggle v-model="email.mark_email_resolved" label="Mark Email Resolved"></q-toggle>
-							  <q-toggle v-model="email.skip_adding_transaction" label="Skip Adding Transaction"></q-toggle>
+							  <transaction-editor @on-modify="onTxnModified(email);" :transaction_data="email.txn" :accounts="accounts" :categories="categories"></transaction-editor>
+							  <q-toggle v-model="email.mark_email_resolved" @update:model-value="onTxnModified(email);" label="Mark Email Resolved"></q-toggle>
+							  <q-toggle v-model="email.skip_adding_transaction" @update:model-value="onTxnModified(email);" label="Skip Adding Transaction"></q-toggle>
 							  <q-list padding bordered class="rounded-borders">
 							  <q-expansion-item expand-separator label="Pattern Match Info" header-class="text-primary">
 								  <q-card><q-card-section>
@@ -95,7 +95,12 @@ const app = Vue.createApp({
 		let accountIdToName = {};
 
 		async function importAction () {
-			const updates = [];
+			const txnIds = [];
+			const txnData = {"date": [], "description": []};
+			const postingIds = [];
+			const postingData = {"account": [], "amount": [], "transaction": [], "posting_comment": [], "posting_status": []};
+			const emailProcessedIds = [];
+			const emailProcessedData = {"processed": []};
 			successMessage.value = "Processing...";
 			errorMessage.value = "";
 			for (let i in emails.value)
@@ -107,7 +112,22 @@ const app = Vue.createApp({
 					if (thisTxn.date && thisTxnDate.length == 3 && thisTxn.description && thisTxn.account && thisTxn.amount && thisTxn.category)
 					{
 						const thisAmount = parseFloat(thisTxn.amount);
-						updates.push({account: thisTxn.account, amount: thisAmount, date: thisTxn.date, description: thisTxn.description, category: thisTxn.category, comment: thisTxn.comment});
+						txnIds.push(-1);
+						txnData["date"].push(thisTxn.date);
+						txnData["description"].push(thisTxn.description);
+						/* First posting of txn */
+						postingIds.push(-1);
+						postingData["account"].push(thisTxn.account);
+						postingData["amount"].push(thisAmount);
+						postingData["posting_comment"].push("");
+						postingData["posting_status"].push("");
+
+						/* Second posting of txn */
+						postingIds.push(-1);
+						postingData["account"].push(thisTxn.category);
+						postingData["amount"].push(-thisAmount);
+						postingData["posting_comment"].push(thisTxn.comment);
+						postingData["posting_status"].push("EI");
 					}
 					else
 					{
@@ -118,27 +138,36 @@ const app = Vue.createApp({
 				}
 				if (emails.value[i].mark_email_resolved)
 				{
-					updates.push({markResolvedId: emails.value[i].id});
+					emailProcessedIds.push(emails.value[i].id);
+					emailProcessedData["processed"].push(true);
 				}
 			}
-			for (let r in updates)
+			const val = await grist.docApi.applyUserActions([ ["BulkAddRecord", "Transactions", txnIds, txnData]])
+			for (let i in val.retValues[0])
 			{
-				if (updates[r].markResolvedId)
-				{
-					await grist.docApi.applyUserActions([ ["UpdateRecord", "Incoming_Transaction_Emails", updates[r].markResolvedId, {processed: true}]])
-				}
-				else
-				{
-					const val = await grist.docApi.applyUserActions([ ["AddRecord", "Transactions", -1, {"date": updates[r].date, "description": updates[r].description}]])
-					const txnId = val.retValues[0];
-
-					await grist.docApi.applyUserActions([ ["AddRecord", "Postings", -1, {"account": updates[r].account, "amount": updates[r].amount, transaction: txnId}]])
-					await grist.docApi.applyUserActions([ ["AddRecord", "Postings", -1, {"account": updates[r].category, "amount": -updates[r].amount, posting_comment: updates[r].comment, posting_status: "EI", transaction: txnId}]])
-				}
+				postingData["transaction"].push(val.retValues[0][i]);
+				postingData["transaction"].push(val.retValues[0][i]);
 			}
+			if (postingData["transaction"].length != postingData["account"].length)
+			{
+				successMessage.value = "";
+				errorMessage.value = "Transactions were not correctly inserted, database error!  Number of new transaction IDs returned were not enough for the postings that need to be inserted.";
+				return;
+			}
+			await grist.docApi.applyUserActions([ ["BulkAddRecord", "Postings", postingIds, postingData]])
+			await grist.docApi.applyUserActions([ ["BulkUpdateRecord", "Incoming_Transaction_Emails", emailProcessedIds, emailProcessedData]])
+
 			successMessage.value = "All transactions were successfully imported.";
 			errorMessage.value = "";
 			emails.value = [];
+		};
+
+		async function onTxnModified(email) {
+			email.txnModified = true;
+			email.txn.mark_email_resolved = email.mark_email_resolved;
+			email.txn.skip_adding_transaction = email.skip_adding_transaction;
+
+			await grist.docApi.applyUserActions([ ["UpdateRecord", "Incoming_Transaction_Emails", email.id, {saved_modifications: JSON.stringify(email.txn)}]])
 		};
 
 		async function matchTransactions () {
@@ -159,7 +188,7 @@ const app = Vue.createApp({
 					{
 						emails.value[i].likelyDuplicate = true;
 						lookups.existing[refKey] = lookups.existing[refKey] - 1;
-						if (!emails.value[i].txnModified)
+						if (!emails.value[i].txnModified && !emails.value[i].saved_modifications)
 						{
 							emails.value[i].skip_adding_transaction = true;
 						}
@@ -169,7 +198,7 @@ const app = Vue.createApp({
 						emails.value[i].likelyDuplicate = true;
 						console.log("Did minus fuzzy date match");
 						lookups.existing[refKeyMinus] = lookups.existing[refKeyMinus] - 1;
-						if (!emails.value[i].txnModified)
+						if (!emails.value[i].txnModified && !emails.value[i].saved_modifications)
 						{
 							emails.value[i].skip_adding_transaction = true;
 						}
@@ -179,7 +208,7 @@ const app = Vue.createApp({
 						emails.value[i].likelyDuplicate = true;
 						console.log("Did plus fuzzy date match");
 						lookups.existing[refKeyPlus] = lookups.existing[refKeyPlus] - 1;
-						if (!emails.value[i].txnModified)
+						if (!emails.value[i].txnModified && !emails.value[i].saved_modifications)
 						{
 							emails.value[i].skip_adding_transaction = true;
 						}
@@ -187,7 +216,7 @@ const app = Vue.createApp({
 					else
 					{
 						emails.value[i].likelyDuplicate = false;
-						if (!emails.value[i].txnModified)
+						if (!emails.value[i].txnModified && !emails.value[i].saved_modifications)
 						{
 							emails.value[i].skip_adding_transaction = false;
 						}
@@ -231,7 +260,13 @@ const app = Vue.createApp({
 					thisEmail.mark_email_resolved = true;
 					thisEmail.skip_adding_transaction = false;
 				}
-				if (!thisEmail.txnModified)
+				if (thisEmail.saved_modifications)
+				{
+					thisEmail.txn = JSON.parse(thisEmail.saved_modifications);
+					thisEmail.mark_email_resolved = thisEmail.txn.mark_email_resolved;
+					thisEmail.skip_adding_transaction = thisEmail.txn.skip_adding_transaction;
+				}
+				else if (!thisEmail.txnModified)
 				{
 					thisEmail.txn = {};
 					thisEmail.rules = {};
@@ -346,6 +381,7 @@ const app = Vue.createApp({
 					processedEmail.text = textArray.join(" ");
 					processedEmail.subject = emailtable.subject[i];
 					processedEmail.date = email.date;
+					processedEmail.saved_modifications = emailtable.saved_modifications[i];
 					processedEmails.push(processedEmail);
 
 					//console.log(nonWhitespace);
@@ -385,6 +421,7 @@ const app = Vue.createApp({
 			accountIdToName,
 			loadAction,
 			importAction,
+			onTxnModified,
 			errorMessage,
 			successMessage,
 			updateEmails
